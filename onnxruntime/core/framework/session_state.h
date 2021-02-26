@@ -333,6 +333,23 @@ class SessionState {
                                   bool remove_initializers,
                                   std::unordered_map<std::string, size_t>& constant_initializers_use_count);
 
+  /**
+   * @brief  In certain training scenarios, tensors recorded in initializer_allocation_order
+   * need to be allocated continously by the specified order, in one single buffer.
+   * This is achieved using memory pattern tracing. However, this makes it hard to release
+   * individual tensor buffers after prepacking.
+   * 
+   * @return Whether initializers should be traced using memory pattern planner
+  */
+  bool ShouldTraceInitializers() const {
+#ifdef ENABLE_TRAINING
+    const bool in_training = true;
+#else
+    const bool in_training = false;
+#endif
+    return enable_mem_pattern_ && in_training;
+  }
+
 #ifdef ENABLE_TRAINING
   Status GeneratePatternGroupCache(
       const std::vector<std::reference_wrapper<const TensorShape>>& input_shape,

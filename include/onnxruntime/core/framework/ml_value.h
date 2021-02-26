@@ -23,6 +23,16 @@ struct OrtValue {
   OrtValue() : data_(nullptr) {}
   ~OrtValue() = default;
 
+  OrtValue(const OrtValue&) = default;
+
+  OrtValue(OrtValue&& other)
+      : data_(std::move(other.data_)),
+      type_(std::move(other.type_)),
+      fence_(std::move(other.fence_))
+  {}
+
+  OrtValue& operator=(const OrtValue&) = default;
+
   OrtValue(void* pData, onnxruntime::MLDataType type, onnxruntime::DeleteFunc deleter) {
     Init(pData, type, deleter);
   }
@@ -34,6 +44,16 @@ struct OrtValue {
 
   bool IsAllocated() const {
     return data_ && type_;
+  }
+
+  long GetUseCount() const {
+    return data_.use_count();
+  }
+
+  void Reset() {
+    data_.reset();
+    type_ = nullptr;
+    fence_.reset();
   }
 
   template <typename T>

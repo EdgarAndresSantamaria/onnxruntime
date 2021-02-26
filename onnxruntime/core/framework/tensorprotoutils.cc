@@ -659,6 +659,10 @@ Status TensorProtoToMLValue(const Env& env, const ORTCHAR_T* model_path,
     if (endian::native == endian::little && raw_data != nullptr && deleter_for_file_data.d.f != nullptr) {
       tensor_data = raw_data;
       MoveOrtCallback(deleter_for_file_data.d, deleter);
+      //TODO significant memory waste when tensor is large
+      // in the common training scenario, this extra buffer for file reading,
+      // together with the pre-allocated buffer, are both held on for a really
+      // long time.
     } else {
       void* preallocated = m.GetBuffer();
       size_t preallocated_size = m.GetLen();
@@ -706,6 +710,10 @@ Status TensorProtoToMLValue(const Env& env, const ORTCHAR_T* model_path,
               return Status(common::ONNXRUNTIME, common::FAIL, "initialize preallocated buffer failed");
             }
 
+            //This creates an implicity restriction that is hard to enforce:
+            //  this deleter must be called before the preallocated buffer is released, or else
+            //  we get a potention memory corruption. Is it possible we augment the Tensor
+            //  destructor, and register this deleter in the tensor?
             deleter.f = UnInitTensor;
             deleter.param = new UnInitializeParam{preallocated, preallocated_size, ele_type};
           }

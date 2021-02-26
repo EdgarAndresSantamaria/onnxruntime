@@ -29,8 +29,21 @@ common::Status SimpleTensorAllocator::GetPreallocatedBuffer(int ort_value_index,
     return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "Failed to get allocator for initializer '", name,
                            "', location: ", location.ToString());
   void* buffer = alloc->Alloc(len);
-  weights_buffers_.push_back(BufferUniquePtr(buffer, alloc));
+
+  // We use the vector index to uniquely identify the buffer for a tensor,
+  // Since we have many more tensors than just weights, this is wasteful.
+  // And since the session state owns weight buffers, we should not really
+  // be messing around with its internal structure.
+
+  // TODO!! search for all reference to weights_buffers before changing the
+  // implementation here! 
+
+  // TODO!! Consider giving buffer ownership to the Tensor where it belongs.
+  auto& bufptr = weights_buffers_[ort_value_index];
+  ORT_ENFORCE(!bufptr, "Duplicate allocation for ort value: ", ort_value_index, " name: ", name);
+  bufptr = BufferUniquePtr(buffer, alloc);
   out = onnxruntime::make_unique<MemBuffer>(buffer, len, location);
   return Status::OK();
 }
+
 }  // namespace onnxruntime

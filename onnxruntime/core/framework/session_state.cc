@@ -258,7 +258,8 @@ void SessionState::CleanInitializedTensorsFromGraph() {
   graph_.CleanAllInitializedTensors();
 }
 
-Status SessionState::PrepackConstantInitializedTensors(std::unordered_map<std::string, size_t>& constant_initializers_use_count) {
+Status SessionState::PrepackConstantInitializedTensors(
+    std::unordered_map<std::string, size_t>& constant_initializers_use_count){
   for (auto& node : GetGraphViewer().Nodes()) {
     auto kernel = GetMutableKernel(node.Index());
     int input_idx = 0;
@@ -272,14 +273,55 @@ Status SessionState::PrepackConstantInitializedTensors(std::unordered_map<std::s
           int ort_value_idx;
           if (st->GetOrtValueNameIdxMap().GetIdx(input_name, ort_value_idx).IsOK()) {
             std::unordered_map<int, OrtValue>& constant_initialized_tensors = st->constant_initialized_tensors_;
-            if (constant_initialized_tensors.count(ort_value_idx)) {
+            auto const_tensor_it = constant_initialized_tensors.find(ort_value_idx);
+            if (const_tensor_it != constant_initialized_tensors.end()) {
               bool is_packed = false;
-              const Tensor& const_initialized_tensor = constant_initialized_tensors[ort_value_idx].Get<Tensor>();
+              const Tensor& const_initialized_tensor = const_tensor_it->second.Get<Tensor>();
               ORT_RETURN_IF_ERROR(kernel->PrePack(const_initialized_tensor, input_idx, is_packed));
               if (is_packed && constant_initializers_use_count.count(input_name) && --constant_initializers_use_count[input_name] == 0) {
                 // release the constant initialized tensor
+                OrtValue ov(std::move(const_tensor_it->second));
                 st->initialized_tensors_.erase(ort_value_idx);
-                constant_initialized_tensors.erase(ort_value_idx);
+                constant_initialized_tensors.erase(const_tensor_it);
+                if (ov.GetUseCount() <= 1 && st->ShouldTraceInitializers()) {
+                  // In some Tensor construction sites, e.g. TensorProtoToMLValue(), a
+                  // deleter is created that must be called before buffer release.
+                  // and we don't have access to this deleter.
+                  // Fortunately as of 2021/02/25 only string tensors has deleter.
+                  // We are screwed if some one introduce some other deleter later.
+                  ORT_ENFORCE(!const_initialized_tensor.IsDataTypeString(),
+                      "String tensor should not be prepacked, as proper buffer releasing is difficult.");
+
+                  //TODO!! Intricate inter component dependencies!
+                  // Here we relies on two facts that
+                  // 1. when st->ShouldTraceInitializers() returns true, SimpleTensorAllocator was used
+                  //    for buffer allocation.
+                  // 2. implementation detail of SimpleTensorAllocator::GetPreallocatedBuffer() so that
+                  //    we can find the buffer curresponding to this tensor we are interested in.
+                  //
+                  // So this is pretty brittle. A better solution is for the tensor allocator to transfer
+                  // the ownership of the buffer to the tensor object. Unfortunately, the rabbit hole
+                  // gets deep.
+                  //
+                  // First, MemBuffer class is used to transfer buffer info from the tensor allocator
+                  // to tensor deserializer. This class does not carry ownership information. We need
+                  // to augment this class to indicate whether the buffer can be deallocated, and how.
+                  //
+                  // Second, the tensor deserializers, mainly TensorProtoToMLValue, sometimes returns
+                  // deleter objects that are independent from buffer deleters, but must be called
+                  // when the tensor is destructed. Handling of these deleters are quite inconsistent
+                  // across different callers, making it hard to understand so as to make consistent
+                  // changes.
+                  //
+                  // Hope we have resources in the future to make the proper change.
+
+                  ov.Reset();
+                  BufferUniquePtr& bufp = st->weights_buffers_[ort_value_idx];
+                  if (!bufp) {
+                    ORT_THROW("Double release of buffers for ort value ", ort_value_idx, " name: ", input_name);
+                  }
+                  bufp.reset();
+                }
               }
             }
             // stop searching in 2 cases:
@@ -1004,10 +1046,10 @@ Status SessionState::FinalizeSessionStateImpl(const std::basic_string<PATH_CHAR_
   MemoryInfo::GenerateTensorMap(GetExecutionPlan(), GetOrtValueNameIdxMap());
 #endif
 
-  std::unique_ptr<ITensorAllocator> tensor_allocator(
-      ITensorAllocator::Create(enable_mem_pattern_, *p_seq_exec_plan_, *this, weights_buffers_));
-
   const auto& initializer_allocation_order = p_seq_exec_plan_->initializer_allocation_order;
+
+  std::unique_ptr<ITensorAllocator> tensor_allocator(
+      ITensorAllocator::Create(ShouldTraceInitializers(), *p_seq_exec_plan_, *this, weights_buffers_));
 
   // move initializers from TensorProto instances in Graph to OrtValue instances in SessionState
   ORT_RETURN_IF_ERROR(

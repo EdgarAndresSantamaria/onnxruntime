@@ -17,7 +17,8 @@ std::unique_ptr<ITensorAllocator> ITensorAllocator::Create(bool enable_mem_patte
   if (enable_mem_pattern) {
     return onnxruntime::make_unique<TensorAllocatorWithMemPattern>(execution_plan, session_state, weights_buffers);
   } else {
-    return onnxruntime::make_unique<SimpleTensorAllocator>(execution_plan, session_state, weights_buffers);
+    const int num_ort_vals = session_state.GetOrtValueNameIdxMap().MaxIdx();
+    return onnxruntime::make_unique<SimpleTensorAllocator>(execution_plan, session_state, weights_buffers, num_ort_vals);
   }
 }
 }  // namespace onnxruntime

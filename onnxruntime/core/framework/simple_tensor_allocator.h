@@ -23,10 +23,12 @@ class SimpleTensorAllocator : public ITensorAllocator {
 
  public:
   SimpleTensorAllocator(const ExecutionPlanBase& execution_plan, const SessionState& session_state,
-                        std::vector<BufferUniquePtr>& weights_buffers)
+                        std::vector<BufferUniquePtr>& weights_buffers, const int max_ort_idx)
       : ITensorAllocator(session_state),
         weights_buffers_(weights_buffers),
-        seq_plan_(execution_plan) {}
+        seq_plan_(execution_plan) {
+    weights_buffers_.resize(max_ort_idx+1);
+  }
 
   common::Status FinalizePlan(std::unordered_map<std::string, size_t>& planned_memory_sizes_in_byte) override {
     // There is no memory plan to allocate a big block of memory, so
